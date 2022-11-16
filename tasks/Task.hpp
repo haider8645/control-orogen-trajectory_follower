@@ -16,7 +16,7 @@ namespace trajectory_follower{
      * \brief The task context provides and requires services. It uses an ExecutionEngine to perform its functions.
      * Essential interfaces are operations, data flow ports and properties. These interfaces have been defined using the oroGen specification.
      * In order to modify the interfaces you should (re)use oroGen and rely on the associated workflow.
-     * 
+     *
      * \details
      * The name of a TaskContext is primarily defined via:
      \verbatim
@@ -61,6 +61,8 @@ namespace trajectory_follower{
         bool turning_left;
         bool turning_right;
 
+        double previous_distance_closest_obstacle;
+
     public:
         /** TaskContext constructor for Task
          * \param name Name of the task. This name needs to be unique to make it identifiable via nameservices.
@@ -71,7 +73,7 @@ namespace trajectory_follower{
         /** TaskContext constructor for Task
          * \param name Name of the task. This name needs to be unique to make it identifiable for nameservices.
          * \param engine The RTT Execution engine to be used for this task, which serialises the execution of all commands, programs, state machines and incoming events for a task.
-         * 
+         *
          */
         Task(std::string const& name, RTT::ExecutionEngine* engine);
 

@@ -58,6 +58,7 @@ bool Task::isMotionCommandZero(const Motion2D& mc)
 
 bool Task::configureHook()
 {
+    previous_distance_closest_obstacle = -1.0;
     if (! TaskBase::configureHook())
         return false;
 
@@ -99,10 +100,19 @@ void Task::getNextPose(const Motion2D& mc){
 
     const double time_step_in_future = 0.5;
 
+    Motion2D motionCommand = mc;
+
     //new_heading = current_heading + (motionCommand.rotation * std::abs((previous_time-current_time).toSeconds()));
+
+    if(mc.rotation < 0){
+        motionCommand.rotation += 2*M_PI;
+    }
+    if(current_heading < 0){
+        current_heading += 2*M_PI;
+    }
     new_heading = current_heading + (motionCommand.rotation * time_step_in_future);
 
-    //where will I be after 1.2 seconds
+    //where will I be after 0.5 seconds
     double delta = motionCommand.translation * time_step_in_future;
 
     new_position.x() = current_position.x() + (delta * cos(new_heading));
@@ -121,7 +131,9 @@ Eigen::Vector3d Task::getClosestObjectCentroid(std::vector<pointcloud_obstacle_d
 
     for (int i{0}; i < dynamic_objects.size(); ++i){
 
-        Eigen::Vector3d object_in_robot_frame((dynamic_objects.at(i).x_min + dynamic_objects.at(i).x_max)/2,(dynamic_objects.at(i).y_min+dynamic_objects.at(i).y_max)/2,0);
+        Eigen::Vector3d object_in_robot_frame((dynamic_objects.at(i).x_min+dynamic_objects.at(i).x_max)/2,
+                                              (dynamic_objects.at(i).y_min+dynamic_objects.at(i).y_max)/2,
+                                              (dynamic_objects.at(i).z_min+dynamic_objects.at(i).z_max)/2);
         Eigen::Vector3d object_in_world_frame = robot2map * object_in_robot_frame;
 
         double dist = std::abs((object_in_world_frame - robot2map.translation()).norm());
@@ -134,7 +146,9 @@ Eigen::Vector3d Task::getClosestObjectCentroid(std::vector<pointcloud_obstacle_d
     }
 
     pointcloud_obstacle_detection::Box closest_box = dynamic_objects.at(object_index);
-    Eigen::Vector3d object_in_robot_frame((closest_box.x_min + closest_box.x_max)/2,(closest_box.y_min+closest_box.y_max)/2,0);
+    Eigen::Vector3d object_in_robot_frame((closest_box.x_min+closest_box.x_max)/2,
+                                          (closest_box.y_min+closest_box.y_max)/2,
+                                          (closest_box.z_min+closest_box.z_max)/2);
     return object_in_robot_frame;
 }
 
@@ -147,12 +161,14 @@ void Task::turnLeft(Motion2D& mc){
         return;
     }
 
-    if (mc.rotation < 0.01 && mc.rotation > -0.01){
-        mc.rotation = 0.2;
-    }
-    else{
-        mc.rotation = std::abs(mc.rotation) + 0.5;
-    }
+    //if (mc.rotation < 0.01 && mc.rotation > -0.01){
+    //    mc.rotation = 0.2;
+    //}
+    //else{
+    //    mc.rotation = std::abs(mc.rotation) + 0.5;
+    //}
+
+    mc.rotation = std::abs(mc.rotation) + 0.2*(std::abs(mc.rotation));
 
     turning_left = true;
 }
@@ -166,12 +182,13 @@ void Task::turnRight(Motion2D& mc){
         return;
     }
 
-    if (mc.rotation < 0.01 && mc.rotation > -0.01){
-        mc.rotation = -0.2;
-    }
-    else{
-       mc.rotation = -std::abs(mc.rotation) - 0.5;
-    }
+    //if (mc.rotation < 0.01 && mc.rotation > -0.01){
+    //    mc.rotation = -0.2;
+    //}
+    //else{
+    //   mc.rotation = -std::abs(mc.rotation) - 0.5;
+    //}
+    mc.rotation = -(std::abs(mc.rotation) + 0.2*(std::abs(mc.rotation)));
     turning_right = true;
 }
 
@@ -222,33 +239,55 @@ void Task::updateHook()
     }
 
     FollowerStatus status = trajectoryFollower.traverseTrajectory(motionCommand, robotPose);
+    current_heading = robotPose.getYaw();
+    current_position = robotPose.position.head<2>();
 
     if (_enable_evasive_behavior.get() && status == TRAJECTORY_FOLLOWING){
         Motion2D copy = motionCommand;
         _dynamic_objects.readNewest(dynamic_objects,false);
-        current_heading = robotPose.getYaw();
-        current_position = robotPose.position.head<2>();
         Eigen::Vector3d closest_object_in_robot_frame;
+        bool execute_evasive_action = false;
         if (dynamic_objects.size() > 0){
             closest_object_in_robot_frame = getClosestObjectCentroid(dynamic_objects);
 
-            if (closest_object_in_robot_frame.y() < 0.0 && closest_object_in_robot_frame.y() > -1.0){
-                turnLeft(copy);
-                turning_right = false;
-            }
-            else if (closest_object_in_robot_frame.y() >= 0.0 && closest_object_in_robot_frame.y() < 1.0){
-                turnRight(copy);
-                turning_left = false;
+            const double current_distance_closest_obstacle = closest_object_in_robot_frame.norm();
+            if (previous_distance_closest_obstacle < 0){ //first run
+                previous_distance_closest_obstacle = current_distance_closest_obstacle;
             }
             else{
-                turning_left = false;
-                turning_right = false;
+                const double movement = current_distance_closest_obstacle-previous_distance_closest_obstacle;
+                if (std::abs(movement) < 0.01){ //ignore small jerks maybe due to sensor errors
+                    previous_distance_closest_obstacle = current_distance_closest_obstacle;
+                }
+                else{
+                    //TODO: use robot dimensions for the clearance check
+                    execute_evasive_action = (movement < 0) ? true : false;
+                    if (execute_evasive_action && closest_object_in_robot_frame.y() < 0.0 && closest_object_in_robot_frame.y() > -1.0){
+                        turnLeft(copy);
+                        turning_right = false;
+                    }
+                    //TODO: use robot dimensions for the clearance check
+                    else if (execute_evasive_action && closest_object_in_robot_frame.y() >= 0.0 && closest_object_in_robot_frame.y() < 1.0){
+                        turnRight(copy);
+                        turning_left = false;
+                    }
+                    else{
+                        turning_left = false;
+                        turning_right = false;
+                    }
+                    getNextPose(copy);
+                    Eigen::Vector3d future_position(new_position.x(), new_position.y(),0);
+                    if (isTraversable(future_position)){
+                        motionCommand = copy;
+                    }
+                }
+                previous_distance_closest_obstacle = current_distance_closest_obstacle;
             }
-            getNextPose(copy);
-            Eigen::Vector3d future_position(new_position.x(), new_position.y(),0);
-            if (isTraversable(future_position)){
-                motionCommand = copy;
-            }
+        }
+        else{
+            previous_distance_closest_obstacle = -1;
+            turning_left = false;
+            turning_right = false;
         }
     }
 
